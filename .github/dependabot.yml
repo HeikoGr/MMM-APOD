@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # This fork has no develop branch; updates go straight to master.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # A fresh release waits 3 days: a compromised or broken one is usually pulled by then.
+    cooldown:
+      default-days: 3
+    groups:
+      npm-development:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
