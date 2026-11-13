@@ -8,11 +8,10 @@
  * MIT Licensed.
  */
 
-Module.register("MMM-APOD",{
-
+Module.register("MMM-APOD", {
 	// Default module config
 	defaults: {
-		appid: "",
+		appid: "", // optional: NASA's current APOD API needs no key; sent as api_key when set
 		updateInterval: 6 * 60 * 60 * 1000, // every 6 hours
 		animationSpeed: 1000, // 1 second
 		maxMediaWidth: 0,
@@ -20,258 +19,201 @@ Module.register("MMM-APOD",{
 		maxDescriptionLength: 200,
 		backgroundSize: "cover",
 		backgroundPosition: "center",
-		backgroundOverlay: "linear-gradient(to bottom, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0) 80%, rgba(0, 0, 0, 0.75) 100%)",
+		backgroundOverlay:
+			"linear-gradient(to bottom, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0) 40%, rgba(0, 0, 0, 0) 80%, rgba(0, 0, 0, 0.75) 100%)",
 		showTitle: true,
 		showDescription: false,
 		useShortDescription: true,
 
 		initialLoadDelay: 0, // 0 seconds delay
-		retryDelay: 2500, // 2,5 seconds
+		retryDelay: 2500, // first retry after 2.5 seconds, doubling up to updateInterval
 
 		apiBase: "https://science.nasa.gov/wp-json/wp/v2/",
 		apodEndpoint: "apod-basic/",
 	},
 
-	// Define required scripts
-	getStyles: function() {
-		return ["MMM-APOD.css"];
-	},
+	getStyles: () => ["MMM-APOD.css"],
 
-	// Define start sequence
-	start: function() {
-		Log.info("Starting module: " + this.name);
+	start: function () {
+		Log.info(`Starting module: ${this.name}`);
 
-		this.title = null;
-		this.description = null;
-		this.copyright = null;
-		this.type = null;
-		this.url = null;
+		this.apod = null; // { title, description, copyright, alt, type, url }
+		this.error = null;
+		this.failures = 0;
+		this.backgrounded = this.data.position === "fullscreen_below";
+		if (this.backgrounded) this.data.header = null;
 
-		if(this.data.position === 'fullscreen_below') {
-			this.backgrounded = true;
-			this.data.header = null;
-		} else {
-			this.backgrounded = false;
-		}
-
-		this.loaded = false;
 		this.scheduleUpdate(this.config.initialLoadDelay);
 	},
 
-	// Override dom generator
-	getDom: function() {
-		var wrapper = document.createElement("div");
+	getDom: function () {
+		const wrapper = document.createElement("div");
 
-		if(this.config.appid === "") {
-			wrapper.innerHTML = "Please set the correct NASA <i>appid</i> in the config for module: " + this.name + ".";
+		if (!this.apod) {
+			// Before the first picture: say why there is none instead of "Loading…" forever.
+			wrapper.textContent = this.error ? `${this.name}: ${this.error}` : this.translate("LOADING");
 			wrapper.className = "dimmed light small";
 			return wrapper;
 		}
 
-		if(!this.loaded) {
-			wrapper.innerHTML = this.translate("LOADING");
-			wrapper.className = "dimmed light small";
+		const { apod } = this;
+		if (this.backgrounded) {
+			const background = document.createElement("div");
+			background.className = "background";
+			background.style.backgroundSize = this.config.backgroundSize;
+			background.style.backgroundPosition = this.config.backgroundPosition;
+			background.style.backgroundImage = `url("${encodeURI(apod.url)}")`;
+			wrapper.appendChild(background);
+
+			if (this.config.backgroundOverlay) {
+				const overlay = document.createElement("div");
+				overlay.className = "overlay";
+				overlay.style.background = this.config.backgroundOverlay;
+				wrapper.appendChild(overlay);
+			}
 			return wrapper;
 		}
 
-		if(this.backgrounded) {
-			var apodBackground = document.createElement('div');
+		if (this.config.showTitle) {
+			wrapper.appendChild(this.textDiv("dimmed light small", apod.title));
+		}
 
-			apodBackground.className = "background";
+		const image = document.createElement("img");
+		if (Number(this.config.maxMediaWidth) !== 0) image.style.maxWidth = `${this.config.maxMediaWidth}px`;
+		if (Number(this.config.maxMediaHeight) !== 0) image.style.maxHeight = `${this.config.maxMediaHeight}px`;
+		image.src = apod.url;
+		image.alt = apod.alt;
+		wrapper.appendChild(image);
 
-			apodBackground.style.backgroundSize = this.config.backgroundSize;
-			apodBackground.style.backgroundPosition = this.config.backgroundPosition;
-			apodBackground.style.backgroundImage = 'url("' + this.url + '")';
+		// The API leaves copyright out (or empty) for public-domain pictures.
+		if (apod.copyright) {
+			wrapper.appendChild(this.textDiv("dimmed thin xsmall", `© ${apod.copyright}`));
+		}
 
-			wrapper.appendChild(apodBackground);
-			
-			if(this.config.backgroundOverlay != "") {
-				var apodBackgroundOverlay = document.createElement('div');
-
-				apodBackgroundOverlay.className = "overlay";
-
-				apodBackgroundOverlay.style.background = this.config.backgroundOverlay;
-
-				wrapper.appendChild(apodBackgroundOverlay);
+		if (this.config.showDescription && apod.description) {
+			const text = this.config.useShortDescription
+				? this.shortText(apod.description, this.config.maxDescriptionLength)
+				: apod.description;
+			const description = this.textDiv("dimmed light xsmall description", text);
+			if (Number(this.config.maxMediaWidth) !== 0) {
+				description.style.maxWidth = `${this.config.maxMediaWidth}px`;
+			} else if (apod.type === "video") {
+				description.style.maxWidth = "960px";
 			}
-		} else {
-			if(this.config.showTitle) {
-				var apodTitle = document.createElement('div');
-
-				apodTitle.className = "dimmed light small";
-				apodTitle.innerHTML = this.title;
- 
-				wrapper.appendChild(apodTitle);
-			}
-
-			var apodImage = document.createElement('img');
-
-			if(this.config.maxMediaWidth != 0) {
-				apodImage.style.maxWidth = this.config.maxMediaWidth + 'px';
-			}
-			if(this.config.maxMediaHeight != 0) {
-				apodImage.style.maxHeight = this.config.maxMediaHeight + 'px';
-			}
-
-			apodImage.src = this.url;
-			apodImage.alt = this.title;
-
-			wrapper.appendChild(apodImage);
-
-			if(this.copyright != "" && typeof this.copyright !== "undefined") {
-				var apodCopyright = document.createElement('div');
-
-				apodCopyright.className = "dimmed thin xsmall";
-				apodCopyright.innerHTML = "&copy; " + this.copyright;
-
-				wrapper.appendChild(apodCopyright);
-			}
-
-			if(this.config.showDescription) {
-				var apodDescription = document.createElement('div');
-
-				apodDescription.className = "dimmed light xsmall description";
-
-				if(this.config.maxMediaWidth != 0) {
-					apodDescription.style.maxWidth = this.config.maxMediaWidth + 'px';
-				} else if(this.type === "video") {
-					apodDescription.style.maxWidth = '960px';
-				}
-
-				if(this.config.useShortDescription) {
-					apodDescription.innerHTML = this.shortText(this.description, this.config.maxDescriptionLength);
-				} else {
-					apodDescription.innerHTML = this.description;
-				}
-
-				wrapper.appendChild(apodDescription);
-			}
+			wrapper.appendChild(description);
 		}
 
 		return wrapper;
 	},
 
-	// Request new data from api.nasa.gov
-	updateAPOD: async function() {
-		if(this.config.appid === "") {
-			Log.error(this.name + ": APPID not set.");
-			return;
-		}
+	textDiv: (className, text) => {
+		const div = document.createElement("div");
+		div.className = className;
+		div.textContent = text;
+		return div;
+	},
 
-		var url = this.config.apiBase + this.config.apodEndpoint + "?api_key=" + this.config.appid;
-		var self = this;
-		var retry = true;
+	/** The request URL: only the newest entry (per_page=1), the key only when one is configured. */
+	buildUrl: function () {
+		const url = new URL(this.config.apodEndpoint, this.config.apiBase);
+		url.searchParams.set("per_page", "1");
+		if (this.config.appid) url.searchParams.set("api_key", this.config.appid);
+		return url.toString();
+	},
 
+	updateAPOD: async function () {
+		let retryAfterMs = null;
 		try {
-			const response = await fetch(url);
-			if(response.status === 200) {
-				const result = await response.json();
-
-				const data =
-					Array.isArray(result)
-						? result[0]
-						: result;
-
-				if(!data) {
-					throw new Error(
-						self.name + ": NASA returned no APOD entries."
-					);
+			const response = await fetch(this.buildUrl());
+			if (response.status !== 200) {
+				if (response.status === 429 || response.status === 403) {
+					const seconds = Number(response.headers?.get?.("Retry-After"));
+					if (Number.isFinite(seconds) && seconds > 0) retryAfterMs = seconds * 1000;
 				}
-
-				self.processAPOD(data);
-			} else if(response.status === 403) {
-				self.updateDom(self.config.animationSpeed);
-				retry = false;
-				throw new Error(self.name + ": Incorrect APPID.");
-			} else if(response.status === 429) {
-				self.updateDom(self.config.animationSpeed);
-				retry = false;
-				throw new Error(self.name + ": Rate limit exceeded.");
-			} else {
-				throw new Error(self.name + ": Could not load APOD.");
+				const reason = {
+					403: `access denied by NASA${this.config.appid ? " (check appid)" : ""}`,
+					429: "rate limit exceeded",
+				};
+				throw new Error(reason[response.status] ?? `could not load APOD (HTTP ${response.status})`);
 			}
-		} catch(error) {
-			Log.error(error);
-		} finally {
-			if(retry) {
-				self.scheduleUpdate((self.loaded) ? -1 : self.config.retryDelay);
-			}
+			const result = await response.json();
+			this.processAPOD(Array.isArray(result) ? result[0] : result);
+			this.failures = 0;
+			this.error = null;
+			this.scheduleUpdate(this.config.updateInterval);
+		} catch (error) {
+			this.failures += 1;
+			this.error = error?.message || String(error);
+			Log.error(`${this.name}: ${this.error}`);
+			// Keep the last picture; before the first one show the error.
+			if (!this.apod) this.updateDom(this.config.animationSpeed);
+			this.scheduleUpdate(retryAfterMs ?? this.retryDelayMs());
 		}
 	},
 
-	// Use the received data to set the various values before update DOM
-	processAPOD: function(data) {
-		if(!data || typeof data.media_type === "undefined") {
-			Log.error(this.name + ": Did not receive usable APOD data.");
-			return;
-		}
+	/** Exponential backoff from retryDelay, capped at updateInterval: 2.5 s, 5 s, 10 s, … 6 h. */
+	retryDelayMs: function () {
+		const base = Math.max(1000, Number(this.config.retryDelay) || 0);
+		return Math.min(base * 2 ** (this.failures - 1), this.config.updateInterval);
+	},
 
-		this.title = data.title;
-		this.description = data.explanation;
-		this.copyright = data.copyright;
-
-		this.type = data.media_type;
-
+	/** Takes one API entry; throws when it holds no usable picture (so the caller backs off). */
+	processAPOD: function (data) {
+		if (!data) throw new Error("NASA returned no APOD entry");
 		/*
-		 * The new NASA APOD API uses data.url for the APOD article
-		 * permalink. The actual featured media image is data.hdurl.
-		 *
-		 * Upstream MMM-APOD historically renders video APODs as still
-		 * images, so use NASA's featured image for image, video, and
-		 * iframe entries.
+		 * The new NASA APOD API uses data.url for the APOD article permalink; the featured image
+		 * (also on video days, rendered as a still) is data.hdurl.
 		 */
-		if(
-			this.type === "image" ||
-			this.type === "video" ||
-			this.type === "iframe"
-		) {
-			if(
-				typeof data.hdurl !== "undefined" &&
-				data.hdurl
-			) {
-				this.url = data.hdurl;
-			} else {
-				Log.error(
-					this.name +
-						": NASA did not provide a usable APOD image."
-				);
-				return;
-			}
-		} else {
-			Log.error(
-				this.name +
-					": Unknown APOD media type: " +
-					this.type
-			);
-			return;
+		if (!["image", "video", "iframe"].includes(data.media_type)) {
+			throw new Error(`unknown APOD media type: ${data.media_type}`);
 		}
+		if (!data.hdurl) throw new Error("NASA did not provide a usable APOD image");
 
-		this.loaded = true;
+		const title = this.htmlToText(data.title);
+		this.apod = {
+			title,
+			description: this.htmlToText(data.explanation).replace(/^Explanation:\s*/i, ""),
+			copyright: this.htmlToText(data.copyright),
+			alt: this.htmlToText(data.alt) || title,
+			type: data.media_type,
+			url: data.hdurl,
+		};
 		this.updateDom(this.config.animationSpeed);
 	},
 
-	// Schedule next update
-	scheduleUpdate: function(delay) {
-		var nextLoad = this.config.updateInterval;
-		if(typeof delay !== "undefined" && delay >= 0) {
-			nextLoad = delay;
-		}
-
-		var self = this;
-		setTimeout(function() {
-			self.updateAPOD();
-		}, nextLoad);
+	/**
+	 * Plain text from the API's HTML fields (title, copyright, explanation): tags removed, entities decoded.
+	 * The result only ever goes into textContent, so it is never interpreted as markup.
+	 */
+	htmlToText: (html) => {
+		const named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", hellip: "…", ndash: "–", mdash: "—" };
+		return String(html ?? "")
+			.replace(/<br\s*\/?>/gi, " ")
+			.replace(/<[^>]*>/g, "")
+			.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity) => {
+				if (entity[0] !== "#") return named[entity.toLowerCase()] ?? match;
+				const hex = entity[1].toLowerCase() === "x";
+				const code = hex ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+				return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+			})
+			.replace(/\s+/g, " ")
+			.trim();
 	},
 
-	// Short text without cutting sentences and words
-	shortText: function (text, maxLenght) {
-		if(text.lastIndexOf(".", maxLenght) !== -1) {
-			return text.substr(0, text.lastIndexOf(".", maxLenght)) + ".";
-		} else if(text.lastIndexOf(" ", maxLenght) !== -1) {
-			return text.substr(0, text.lastIndexOf(" ", maxLenght)) + "&hellip;";
-		} else {
-			return text.substr(0, maxLenght) + "&hellip;";
-		} 
-	}
+	scheduleUpdate: function (delay) {
+		const nextLoad = Number.isFinite(delay) && delay >= 0 ? delay : this.config.updateInterval;
+		clearTimeout(this.updateTimer);
+		this.updateTimer = setTimeout(() => this.updateAPOD(), nextLoad);
+	},
 
+	/** Plain text shortened to maxLength without cutting sentences or words. */
+	shortText: (text, maxLength) => {
+		const value = String(text ?? "");
+		if (value.length <= maxLength) return value;
+		const sentenceEnd = value.lastIndexOf(". ", maxLength - 1);
+		if (sentenceEnd > 0) return value.substring(0, sentenceEnd + 1);
+		const wordEnd = value.lastIndexOf(" ", maxLength - 1);
+		if (wordEnd > 0) return `${value.substring(0, wordEnd)}…`;
+		return `${value.substring(0, maxLength - 1)}…`;
+	},
 });
