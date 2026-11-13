@@ -7,7 +7,7 @@
 	"scripts": {
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
-		"test": "node --test tests/"
+		"test": "node --test tests/*.test.js"
 	},
 	"repository": {
 		"type": "git",
